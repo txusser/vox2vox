@@ -8,3 +8,5 @@ urllib3
 scikit-image
 pyvista
 h5py
+nibabel
+nilearn

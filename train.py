@@ -15,7 +15,7 @@ from torchvision import datasets
 from torch.autograd import Variable
 
 from models import *
-from dataset import CTDataset
+from dataset import Dataset_hf5
 
 from dice_loss import diceloss
 
@@ -31,6 +31,7 @@ def train():
     parser.add_argument("--epoch", type=int, default=0, help="epoch to start training from")
     parser.add_argument("--n_epochs", type=int, default=200, help="number of epochs of training")
     parser.add_argument("--dataset_name", type=str, default="leftkidney_3d", help="name of the dataset")
+    parser.add_argument("--dataset_folder", type=str, default="/mnt/d/Work/vox2vox", help="path to the datasets")
     parser.add_argument("--batch_size", type=int, default=1, help="size of the batches")
     parser.add_argument("--glr", type=float, default=0.0002, help="adam: generator learning rate")
     parser.add_argument("--dlr", type=float, default=0.0002, help="adam: discriminator learning rate")
@@ -52,10 +53,12 @@ def train():
     opt = parser.parse_args()
     print(opt)
 
-    os.makedirs("images/%s" % opt.dataset_name, exist_ok=True)
-    os.makedirs("saved_models/%s" % opt.dataset_name, exist_ok=True)
+    os.makedirs("%s/images/%s" % (opt.dataset_folder,opt.dataset_name), exist_ok=True)
+    os.makedirs("%s/saved_models/%s" % (opt.dataset_folder,opt.dataset_name), exist_ok=True)
 
     cuda = True if torch.cuda.is_available() else False
+
+    print("Cuda in use: %s" % str(cuda))
 
     # Loss functions
     criterion_GAN = torch.nn.MSELoss()
@@ -98,14 +101,14 @@ def train():
     ])
 
     dataloader = DataLoader(
-        CTDataset("../../data/%s/train/" % opt.dataset_name, transforms_=transforms_),
+        Dataset_hf5("%s/%s/train/" % (opt.dataset_folder,opt.dataset_name), transforms_=transforms_),
         batch_size=opt.batch_size,
         shuffle=True,
         num_workers=opt.n_cpu,
     )
 
     val_dataloader = DataLoader(
-        CTDataset("../../data/%s/test/" % opt.dataset_name, transforms_=transforms_),
+        Dataset_hf5("%s/%s/test/" % (opt.dataset_folder,opt.dataset_name), transforms_=transforms_),
         batch_size=1,
         shuffle=True,
         num_workers=1,
@@ -127,7 +130,7 @@ def train():
         real_B = real_B.cpu().detach().numpy()
         fake_B = fake_B.cpu().detach().numpy()
 
-        image_folder = "images/%s/epoch_%s_" % (opt.dataset_name, epoch)
+        image_folder = "%s/images/%s/epoch_%s_" % (opt.dataset_folder,opt.dataset_name, epoch)
 
         hf = h5py.File(image_folder + 'real_A.vox', 'w')
         hf.create_dataset('data', data=real_A)
@@ -235,10 +238,12 @@ def train():
 
             discriminator_update = 'False'
 
-        if opt.checkpoint_interval != -1 and epoch % opt.checkpoint_interval == 0:
+        #if opt.checkpoint_interval != -1 or epoch % opt.checkpoint_interval == 0:
             # Save model checkpoints
-            torch.save(generator.state_dict(), "saved_models/%s/generator_%d.pth" % (opt.dataset_name, epoch))
-            torch.save(discriminator.state_dict(), "saved_models/%s/discriminator_%d.pth" % (opt.dataset_name, epoch))
+        print(generator.state_dict())
+        print(discriminator.state_dict())
+        torch.save(generator.state_dict(), "%s/saved_models/%s/generator_%d.pth" % (opt.dataset_folder,opt.dataset_name, epoch))
+        torch.save(discriminator.state_dict(), "%s/saved_models/%s/discriminator_%d.pth" % (opt.dataset_folder,opt.dataset_name, epoch))
 
 
 if __name__ == '__main__':
