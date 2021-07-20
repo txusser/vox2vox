@@ -6,6 +6,7 @@ import itertools
 import time
 import datetime
 import sys
+import glob
 
 import torchvision.transforms as transforms
 from torchvision.utils import save_image
@@ -22,6 +23,7 @@ from dice_loss import diceloss
 import torch.nn as nn
 import torch.nn.functional as F
 import torch
+import nibabel as nib
 
 import h5py
 
@@ -42,10 +44,9 @@ def train():
     parser.add_argument("--img_height", type=int, default=128, help="size of image height")
     parser.add_argument("--img_width", type=int, default=128, help="size of image width")
     parser.add_argument("--img_depth", type=int, default=128, help="size of image depth")
-    parser.add_argument("--channels", type=int, default=1, help="number of image channels")
+    parser.add_argument("--threshold", type=int, default=-1, help="threshold during sampling, -1: No thresholding")
     parser.add_argument("--disc_update", type=int, default=5, help="only update discriminator every n iter")
     parser.add_argument("--d_threshold", type=int, default=.8, help="discriminator threshold")
-    parser.add_argument("--threshold", type=int, default=-1, help="threshold during sampling, -1: No thresholding")
     parser.add_argument(
         "--sample_interval", type=int, default=1, help="interval between sampling of images from generators"
     )
@@ -59,6 +60,9 @@ def train():
     cuda = True if torch.cuda.is_available() else False
 
     print("Cuda in use: %s" % str(cuda))
+
+    nii_sample = glob.glob("%s/%s/train/*_in.nii" % (opt.dataset_folder,opt.dataset_name))[0]
+    img_sample = nib.load(nii_sample)
 
     # Loss functions
     criterion_GAN = torch.nn.MSELoss()
@@ -118,7 +122,9 @@ def train():
     Tensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
 
 
-    def sample_voxel_volumes(epoch):
+    def sample_voxel_volumes(epoch, sample_img):
+
+        
         """Saves a generated sample from the validation set"""
         imgs = next(iter(val_dataloader))
         real_A = Variable(imgs["A"].unsqueeze_(1).type(Tensor))
@@ -126,20 +132,23 @@ def train():
         fake_B = generator(real_A)
 
         # convert to numpy arrays
-        real_A = real_A.cpu().detach().numpy()
-        real_B = real_B.cpu().detach().numpy()
-        fake_B = fake_B.cpu().detach().numpy()
+        real_A = real_A.cpu().detach().numpy()[0,0,:,:,:]
+        real_B = real_B.cpu().detach().numpy()[0,0,:,:,:]
+        fake_B = fake_B.cpu().detach().numpy()[0,0,:,:,:]
 
         image_folder = "%s/images/%s/epoch_%s_" % (opt.dataset_folder,opt.dataset_name, epoch)
 
-        hf = h5py.File(image_folder + 'real_A.vox', 'w')
-        hf.create_dataset('data', data=real_A)
+        nii_name = image_folder + 'real_A.nii'
+        nii_img = nib.Nifti1Image(real_A, sample_img.affine, sample_img.header)
+        nib.save(nii_img,nii_name)
 
-        hf1 = h5py.File(image_folder + 'real_B.vox', 'w')
-        hf1.create_dataset('data', data=real_B)
+        nii_name = image_folder + 'real_B.nii'
+        nii_img = nib.Nifti1Image(real_B, sample_img.affine, sample_img.header)
+        nib.save(nii_img,nii_name)
 
-        hf2 = h5py.File(image_folder + 'fake_B.vox', 'w')
-        hf2.create_dataset('data', data=fake_B)
+        nii_name = image_folder + 'fake_B.nii'
+        nii_img = nib.Nifti1Image(fake_B, sample_img.affine, sample_img.header)
+        nib.save(nii_img,nii_name)
 
     # ----------
     #  Training
@@ -233,17 +242,17 @@ def train():
             )
             # If at sample interval save image
             if batches_done % (opt.sample_interval*len(dataloader)) == 0:
-                sample_voxel_volumes(epoch)
+                sample_voxel_volumes(epoch,img_sample)
                 print('*****volumes sampled*****')
 
             discriminator_update = 'False'
 
-        #if opt.checkpoint_interval != -1 or epoch % opt.checkpoint_interval == 0:
+        if opt.checkpoint_interval != -1 and epoch % opt.checkpoint_interval == 0:
             # Save model checkpoints
-        print(generator.state_dict())
-        print(discriminator.state_dict())
-        torch.save(generator.state_dict(), "%s/saved_models/%s/generator_%d.pth" % (opt.dataset_folder,opt.dataset_name, epoch))
-        torch.save(discriminator.state_dict(), "%s/saved_models/%s/discriminator_%d.pth" % (opt.dataset_folder,opt.dataset_name, epoch))
+            print(generator.state_dict())
+            print(discriminator.state_dict())
+            torch.save(generator.state_dict(), "%s/saved_models/%s/generator_%d.pth" % (opt.dataset_folder,opt.dataset_name, epoch))
+            torch.save(discriminator.state_dict(), "%s/saved_models/%s/discriminator_%d.pth" % (opt.dataset_folder,opt.dataset_name, epoch))
 
 
 if __name__ == '__main__':

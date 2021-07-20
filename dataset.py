@@ -17,12 +17,8 @@ class Dataset_hf5(Dataset):
     def __getitem__(self, idx):
         nii_in = self.samples[idx] + '_in.nii'
         nii_out = self.samples[idx] + '_out.nii'
-        print(nii_in)
-        print(nii_out)
         image = nib.load(nii_in).get_fdata()
         mask = nib.load(nii_out).get_fdata()
-        print(image.shape)
-        print(mask.shape)
         if self.transforms:
             image, mask = self.transforms(image), self.transforms(mask)
         

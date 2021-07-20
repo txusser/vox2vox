@@ -41,14 +41,18 @@ def apply_model():
 
     generator = GeneratorUNet()
     generator.load_state_dict(torch.load(opt.model_pth))
-    generator.eval().cuda(device=0)
+    generator.eval()
 
 
     img = nib.load(opt.in_path)
     img_data = img.get_fdata()
+
+    img_data = np.expand_dims(img_data, axis = 0)
+    img_data = np.expand_dims(img_data, axis = 0)
     tensor_arr = torch.tensor(img_data)
 
     output = generator(tensor_arr).data.cpu().numpy()
+    output = output[0,0,:,:,:]
 
     img_out = nib.Nifti1Image(output,img.affine,img.header)
     nib.save(img_out, opt.out_path)
