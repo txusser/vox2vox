@@ -1,28 +1,15 @@
-import argparse
-import os
+import argparse,os,time,datetime,sys,glob
 import numpy as np
-import time
-import datetime
-import sys
-import glob
+import nibabel as nib
 
-import torchvision.transforms as transforms
-from torchvision.utils import save_image
+import torch
 import torchio as tio
-
 from torch.utils.data import DataLoader
-from torchvision import datasets
 from torch.autograd import Variable
 
 from models import *
 from dataset import torchio_dataset
-
 from dice_loss import diceloss
-
-import torch.nn as nn
-import torch.nn.functional as F
-import torch
-import nibabel as nib
 
 def train():
 
@@ -44,9 +31,7 @@ def train():
     parser.add_argument("--threshold", type=int, default=-1, help="threshold during sampling, -1: No thresholding")
     parser.add_argument("--disc_update", type=int, default=5, help="only update discriminator every n iter")
     parser.add_argument("--d_threshold", type=int, default=.8, help="discriminator threshold")
-    parser.add_argument(
-        "--sample_interval", type=int, default=1, help="interval between sampling of images from generators"
-    )
+    parser.add_argument("--sample_interval", type=int, default=1, help="interval between sampling of images from generators")
     parser.add_argument("--checkpoint_interval", type=int, default=5, help="interval between model checkpoints")
     opt = parser.parse_args()
     print(opt)
@@ -57,16 +42,14 @@ def train():
     if torch.cuda.is_available():
         cuda = True
         device = torch.device('cuda')
+        print("Using CUDA. Device is: %s" % str(device))
+        print("Notice that when training using CUDA you will also need a GPU to perform inference.")
+
     else:
         cuda = False
         device = 'cpu'
+        print("CUDA not avaliable. Using CPU")
     
-
-    print("Cuda in use: %s" % str(cuda))
-
-    nii_sample = glob.glob("%s/%s/train/*_in.nii" % (opt.dataset_folder,opt.dataset_name))[0]
-    img_sample = nib.load(nii_sample)
-
     # Loss functions
     criterion_GAN = torch.nn.MSELoss()
     criterion_voxelwise = diceloss()
@@ -89,8 +72,8 @@ def train():
 
     if opt.epoch != 0:
         # Load pretrained models
-        generator.load_state_dict(torch.load("saved_models/%s/generator_%d.pth" % (opt.dataset_name, opt.epoch)))
-        discriminator.load_state_dict(torch.load("saved_models/%s/discriminator_%d.pth" % (opt.dataset_name, opt.epoch)))
+        generator.load_state_dict(torch.load("%s/saved_models/%s/generator_%d.pth" % (opt.dataset_folder,opt.dataset_name, opt.epoch)))
+        discriminator.load_state_dict(torch.load("%s/saved_models/%s/discriminator_%d.pth" % (opt.dataset_folder,opt.dataset_name, opt.epoch)))
     else:
         # Initialize weights
         generator.apply(weights_init_normal)
@@ -100,37 +83,19 @@ def train():
     optimizer_G = torch.optim.Adam(generator.parameters(), lr=opt.glr, betas=(opt.b1, opt.b2))
     optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=opt.dlr, betas=(opt.b1, opt.b2))
 
-    # Configure dataloaders
-    # transforms_ = transforms.Compose([
-    #     # transforms.Resize((opt.img_height, opt.img_width, opt.img_depth), Image.BICUBIC),
-    #     transforms.ToTensor(),
-    #     #transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-    # ])
-
-    # dataloader = DataLoader(
-    #     Dataset_nifti("%s/%s/train/" % (opt.dataset_folder,opt.dataset_name), transforms_=transforms_),
-    #     batch_size=opt.batch_size,
-    #     shuffle=True,
-    #     num_workers=0,
-    # )
-
-    # val_dataloader = DataLoader(
-    #     Dataset_nifti("%s/%s/test/" % (opt.dataset_folder,opt.dataset_name), transforms_=transforms_),
-    #     batch_size=1,
-    #     shuffle=True,
-    #     num_workers=0,
-    # )
-
+    # The folowwing lines define data augmentation
     rescale = tio.RescaleIntensity(out_min_max=(0, 1))
-    ras_orientation = tio.transforms.ToCanonical()
-    rotation = tio.RandomAffine() 
+    ras_orientation = tio.ToCanonical()
+    rotation = tio.RandomAffine(degrees=30) 
     deformation = tio.RandomElasticDeformation()
-    transform_composition = [rescale, ras_orientation, rotation,deformation]
+    flip = tio.RandomFlip(axes=(0, 1, 2), flip_probability=0.25)
+    transform_composition = [rescale, ras_orientation, rotation,deformation,flip]
     transforms = tio.Compose(transform_composition)
 
+    #Loading the training and validation datasets 
     train_images = torchio_dataset("%s/%s/train/" % (opt.dataset_folder,opt.dataset_name),transforms)
     train_dataset = train_images.prepare_dataset()
-
+    
     test_images = torchio_dataset("%s/%s/test/" % (opt.dataset_folder,opt.dataset_name),transforms)
     test_dataset = test_images.prepare_dataset()
 
@@ -139,34 +104,6 @@ def train():
 
     # Tensor type
     Tensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
-
-    def sample_voxel_volumes(epoch, sample_img):
-
-        
-        """Saves a generated sample from the validation set"""
-        imgs = next(iter(val_dataloader))
-        real_A = imgs['A'][tio.DATA].to(device)
-        real_B = imgs['B'][tio.DATA].to(device)
-        fake_B = generator(real_A)
-
-        # convert to numpy arrays
-        real_A = real_A.cpu().detach().numpy()[0,0,:,:,:]
-        real_B = real_B.cpu().detach().numpy()[0,0,:,:,:]
-        fake_B = fake_B.cpu().detach().numpy()[0,0,:,:,:]
-
-        image_folder = "%s/images/%s/epoch_%s_" % (opt.dataset_folder,opt.dataset_name, epoch)
-
-        nii_name = image_folder + 'real_A.nii'
-        nii_img = nib.Nifti1Image(real_A, sample_img.affine, sample_img.header)
-        nib.save(nii_img,nii_name)
-
-        nii_name = image_folder + 'real_B.nii'
-        nii_img = nib.Nifti1Image(real_B, sample_img.affine, sample_img.header)
-        nib.save(nii_img,nii_name)
-
-        nii_name = image_folder + 'fake_B.nii'
-        nii_img = nib.Nifti1Image(fake_B, sample_img.affine, sample_img.header)
-        nib.save(nii_img,nii_name)
 
     # ----------
     #  Training
@@ -184,7 +121,6 @@ def train():
             # Adversarial ground truths
             valid = Variable(Tensor(np.ones((real_A.size(0), *patch))), requires_grad=False)
             fake = Variable(Tensor(np.zeros((real_A.size(0), *patch))), requires_grad=False)
-
 
             # ---------------------
             #  Train Discriminator, only update every disc_update batches
@@ -220,16 +156,14 @@ def train():
             fake_B = generator(real_A)
             pred_fake = discriminator(fake_B, real_A)
             loss_GAN = criterion_GAN(pred_fake, valid)
+            
             # Voxel-wise loss
             loss_voxel = criterion_voxelwise(fake_B, real_B)
 
             # Total loss
             loss_G = loss_GAN + lambda_voxel * loss_voxel
-
             loss_G.backward()
-
             optimizer_G.step()
-
             batches_done = epoch * len(dataloader) + i
 
             # --------------
@@ -242,33 +176,45 @@ def train():
             prev_time = time.time()
 
             # Print log
-            sys.stdout.write(
-                "\r[Epoch %d/%d] [Batch %d/%d] [D loss: %f, D accuracy: %f, D update: %s] [G loss: %f, voxel: %f, adv: %f] ETA: %s"
-                % (
-                    epoch,
-                    opt.n_epochs,
-                    i,
-                    len(dataloader),
-                    loss_D.item(),
-                    d_total_acu,
-                    discriminator_update,
-                    loss_G.item(),
-                    loss_voxel.item(),
-                    loss_GAN.item(),
-                    time_left,
-                )
-            )
-            # If at sample interval save image
-            if batches_done % (opt.sample_interval*len(dataloader)) == 0:
-                sample_voxel_volumes(epoch,img_sample)
-                print('*****volumes sampled*****')
+            sys.stdout.write("\r[Epoch %d/%d] [Batch %d/%d] [D loss: %f, D accuracy: %f, D update: %s] [G loss: %f, voxel: %f, adv: %f] ETA: %s"
+                % (epoch, opt.n_epochs, i, len(dataloader), loss_D.item(), d_total_acu,
+                   discriminator_update, loss_G.item(), loss_voxel.item(), loss_GAN.item(), time_left))
 
+            # If at sample interval save image examples
+            if batches_done % (opt.sample_interval*len(dataloader)) == 0:
+
+                # Takes the header of the first image in the training set as a sample
+                nii_sample = glob.glob("%s/%s/train/*_in.nii" % (opt.dataset_folder,opt.dataset_name))[0]
+                img_sample = nib.load(nii_sample)
+                
+                imgs = next(iter(val_dataloader))
+                real_A = imgs['A'][tio.DATA].to(device)
+                real_B = imgs['B'][tio.DATA].to(device)
+                fake_B = generator(real_A)
+
+                # convert to numpy arrays
+                real_A = real_A.cpu().detach().numpy()[0,0,:,:,:]
+                real_B = real_B.cpu().detach().numpy()[0,0,:,:,:]
+                fake_B = fake_B.cpu().detach().numpy()[0,0,:,:,:]
+
+                image_folder = "%s/images/%s/epoch_%s_" % (opt.dataset_folder,opt.dataset_name, epoch)
+
+                nii_name = image_folder + 'real_A.nii'
+                nii_img = nib.Nifti1Image(real_A, img_sample.affine, img_sample.header)
+                nib.save(nii_img,nii_name)
+
+                nii_name = image_folder + 'real_B.nii'
+                nii_img = nib.Nifti1Image(real_B, img_sample.affine, img_sample.header)
+                nib.save(nii_img,nii_name)
+
+                nii_name = image_folder + 'fake_B.nii'
+                nii_img = nib.Nifti1Image(fake_B, img_sample.affine, img_sample.header)
+                nib.save(nii_img,nii_name)
+                
             discriminator_update = 'False'
 
         if opt.checkpoint_interval != -1 and epoch % opt.checkpoint_interval == 0:
             # Save model checkpoints
-            #print(generator.state_dict())
-            #print(discriminator.state_dict())
             torch.save(generator.state_dict(), "%s/saved_models/%s/generator_%d.pth" % (opt.dataset_folder,opt.dataset_name, epoch))
             torch.save(discriminator.state_dict(), "%s/saved_models/%s/discriminator_%d.pth" % (opt.dataset_folder,opt.dataset_name, epoch))
 
